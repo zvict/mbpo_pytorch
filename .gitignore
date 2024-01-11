@@ -1,3 +1,9 @@
 data
 .idea
 *__pycache__*
+results
+results/
+slurm
+slurm/
+wandb
+wandb/

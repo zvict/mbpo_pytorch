@@ -34,20 +34,33 @@ class PredictEnv:
             done = ~not_done
             done = done[:, None]
             return done
-        elif 'walker_' in env_name:
-            torso_height =  next_obs[:, -2]
-            torso_ang = next_obs[:, -1]
-            if 'walker_7' in env_name or 'walker_5' in env_name:
-                offset = 0.
-            else:
-                offset = 0.26
-            not_done = (torso_height > 0.8 - offset) \
-                       * (torso_height < 2.0 - offset) \
-                       * (torso_ang > -1.0) \
-                       * (torso_ang < 1.0)
+        elif self.env_name == "AntTruncatedObs-v2":
+            x = next_obs[:, 0]
+            not_done = np.isfinite(next_obs).all(axis=-1) * (x >= 0.2) * (x <= 1.0)
+
             done = ~not_done
-            done = done[:, None]
+            done = done[:,None]
             return done
+        elif self.env_name == "InvertedPendulum-v2":
+            notdone = np.isfinite(next_obs).all(axis=-1) * (np.abs(next_obs[:, 1]) <= 0.2)
+            done = ~notdone
+
+            done = done[:,None]
+
+            return done
+        elif self.env_name == "HumanoidTruncatedObs-v2":
+            z = next_obs[:, 0]
+            done = (z < 1.0) + (z > 2.0)
+
+            done = done[:,None]
+            return done
+        elif 'HalfCheetah' in env_name:
+            assert len(obs.shape) == len(next_obs.shape) == len(act.shape) == 2
+            done = np.array([False]).repeat(len(obs))
+            done = done[:,None]
+            return done
+        else:
+            raise NotImplementedError
 
     def _get_logprob(self, x, means, variances):
 

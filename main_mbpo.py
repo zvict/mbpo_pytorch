@@ -6,6 +6,9 @@ import numpy as np
 from itertools import count
 
 import logging
+import wandb
+import random
+import env
 
 import os
 import os.path as osp
@@ -16,11 +19,39 @@ from sac.sac import SAC
 from model import EnsembleDynamicsModel
 from predict_env import PredictEnv
 from sample_env import EnvSampler
-from tf_models.constructor import construct_model, format_samples_for_training
+# from tf_models.constructor import construct_model, format_samples_for_training
+
+
+def add_metric(metric_dict, args):
+    file_name = os.path.join(args.log_dir, args.save_name, 'metrics.json')
+    wandb_id = wandb.run.id
+    name = args.save_name
+    project = args.project_name
+    tags = args.tags.split(',')
+
+    data = {}
+    if os.path.exists(file_name):
+        with open(file_name) as f:
+            data = json.load(f)
+    
+    data['wandb_id'] = wandb_id
+    data['name'] = name
+    data['project'] = project
+    data['setting'] = args.tags
+    if 'metrics' not in data:
+        data['metrics'] = []
+    data['metrics'].append(metric_dict)
+
+    with open(file_name, 'w') as f:
+        json.dump(data, f, indent=4) 
 
 
 def readParser():
     parser = argparse.ArgumentParser(description='MBPO')
+    parser.add_argument('--project_name', default="IMLE-MBPO")
+    parser.add_argument('--save_name', default="walker2d_mbpo", metavar='A', help='name of test result')
+    parser.add_argument('--tags', type=str, default='MBPO', metavar='A', help='list of tags')
+    parser.add_argument('--log_dir', default="results", metavar='A', help='log dir')
     parser.add_argument('--env_name', default="Hopper-v2",
                         help='Mujoco Gym environment (default: Hopper-v2)')
     parser.add_argument('--seed', type=int, default=123456, metavar='N',
@@ -100,6 +131,7 @@ def readParser():
 
     parser.add_argument('--cuda', default=True, action="store_true",
                         help='run on CUDA (default: True)')
+    parser.add_argument('--wandb_mode', type=str, default='online', metavar='A', help='list of tags')
     return parser.parse_args()
 
 
@@ -112,6 +144,7 @@ def train(args, env_sampler, predict_env, agent, env_pool, model_pool):
     for epoch_step in range(args.num_epoch):
         start_step = total_step
         train_policy_steps = 0
+        epoch_metrics = []
         for i in count():
             cur_step = total_step - start_step
 
@@ -136,6 +169,9 @@ def train(args, env_sampler, predict_env, agent, env_pool, model_pool):
 
             total_step += 1
 
+            if total_step % 200 == 0:
+                print("Total Step: ", total_step, "Env Pool Size: ", len(env_pool), "Model Pool Size: ", len(model_pool))
+
             if total_step % args.epoch_length == 0:
                 '''
                 avg_reward_len = min(len(env_sampler.path_rewards), 5)
@@ -155,8 +191,22 @@ def train(args, env_sampler, predict_env, agent, env_pool, model_pool):
                 # logger.record_tabular("total_step", total_step)
                 # logger.record_tabular("sum_reward", sum_reward)
                 # logger.dump_tabular()
-                logging.info("Step Reward: " + str(total_step) + " " + str(sum_reward))
-                # print(total_step, sum_reward)
+                # logging.info("Step Reward: " + str(total_step) + " " + str(sum_reward))
+                print(total_step, sum_reward)
+
+                metrics = {
+                    'Policy Reward Mean': sum_reward,
+                    'reward step': test_step,
+                    'epoch': epoch_step,
+                    'step': total_step,
+                }
+
+                if args.wandb_mode == 'online':
+                    wandb.log(metrics)
+                epoch_metrics.append(metrics)
+
+        for metric in epoch_metrics:
+            add_metric(metric, args)
 
 
 def exploration_before_start(args, env_sampler, env_pool, agent):
@@ -267,6 +317,18 @@ class SingleEnvWrapper(gym.Wrapper):
 def main(args=None):
     if args is None:
         args = readParser()
+    tags = args.tags.split(',')
+
+    wandb_id = wandb.util.generate_id()
+    wandb.init(
+        name=args.save_name,
+        project=args.project_name,
+        tags=tags,
+        config=args,
+        mode=args.wandb_mode,
+        id=wandb_id,
+        resume=None,
+    )
 
     # Initial environment
     env = gym.make(args.env_name)
@@ -274,6 +336,10 @@ def main(args=None):
     # Set random seed
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    random.seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     env.seed(args.seed)
 
     # Intial agent
@@ -285,9 +351,9 @@ def main(args=None):
     if args.model_type == 'pytorch':
         env_model = EnsembleDynamicsModel(args.num_networks, args.num_elites, state_size, action_size, args.reward_size, args.pred_hidden_size,
                                           use_decay=args.use_decay)
-    else:
-        env_model = construct_model(obs_dim=state_size, act_dim=action_size, hidden_dim=args.pred_hidden_size, num_networks=args.num_networks,
-                                    num_elites=args.num_elites)
+    # else:
+    #     env_model = construct_model(obs_dim=state_size, act_dim=action_size, hidden_dim=args.pred_hidden_size, num_networks=args.num_networks,
+    #                                 num_elites=args.num_elites)
 
     # Predict environments
     predict_env = PredictEnv(env_model, args.env_name, args.model_type)
